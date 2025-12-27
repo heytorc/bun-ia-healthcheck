@@ -5,7 +5,10 @@ import type { IAgent, AgentRequest, AgentResponse } from '../interfaces';
  * Async adapter that communicates with agents asynchronously with queueing
  */
 export class AsyncAgentAdapter extends BaseAgentAdapter {
-  private requestQueue: AgentRequest[] = [];
+  private requestQueue: Array<{
+    request: AgentRequest;
+    resolve: (response: AgentResponse) => void;
+  }> = [];
   private processing: boolean = false;
 
   constructor(agent: IAgent) {
@@ -13,72 +16,65 @@ export class AsyncAgentAdapter extends BaseAgentAdapter {
   }
 
   public async sendRequest(request: AgentRequest): Promise<AgentResponse> {
-    // Add request to queue
-    this.requestQueue.push(request);
+    return new Promise((resolve) => {
+      // Add request to queue with its resolver
+      this.requestQueue.push({ request, resolve });
 
-    // Process queue if not already processing
-    if (!this.processing) {
-      return await this.processQueue();
-    }
-
-    // Wait for the queue to be processed
-    return await this.waitForProcessing(request);
+      // Process queue if not already processing
+      if (!this.processing) {
+        this.processQueue();
+      }
+    });
   }
 
-  private async processQueue(): Promise<AgentResponse> {
+  private async processQueue(): Promise<void> {
+    if (this.processing || this.requestQueue.length === 0) {
+      return;
+    }
+
     this.processing = true;
 
-    try {
-      const request = this.requestQueue.shift();
-      if (!request) {
-        this.processing = false;
-        return {
+    while (this.requestQueue.length > 0) {
+      const item = this.requestQueue.shift();
+      if (!item) {
+        break;
+      }
+
+      const { request, resolve } = item;
+
+      try {
+        if (!this.agent.isAvailable()) {
+          resolve({
+            success: false,
+            error: 'Agent is not available',
+            timestamp: new Date()
+          });
+          continue;
+        }
+
+        if (request.action === 'healthCheck') {
+          const result = await this.agent.executeHealthCheck();
+          resolve({
+            success: true,
+            data: result,
+            timestamp: new Date()
+          });
+        } else {
+          resolve({
+            success: false,
+            error: `Unsupported action: ${request.action}`,
+            timestamp: new Date()
+          });
+        }
+      } catch (error) {
+        resolve({
           success: false,
-          error: 'No request in queue',
+          error: error instanceof Error ? error.message : 'Unknown error occurred',
           timestamp: new Date()
-        };
+        });
       }
-
-      if (!this.agent.isAvailable()) {
-        this.processing = false;
-        return {
-          success: false,
-          error: 'Agent is not available',
-          timestamp: new Date()
-        };
-      }
-
-      if (request.action === 'healthCheck') {
-        const result = await this.agent.executeHealthCheck();
-        this.processing = false;
-        return {
-          success: true,
-          data: result,
-          timestamp: new Date()
-        };
-      }
-
-      this.processing = false;
-      return {
-        success: false,
-        error: `Unsupported action: ${request.action}`,
-        timestamp: new Date()
-      };
-    } catch (error) {
-      this.processing = false;
-      return {
-        success: false,
-        error: error instanceof Error ? error.message : 'Unknown error occurred',
-        timestamp: new Date()
-      };
     }
-  }
 
-  private async waitForProcessing(request: AgentRequest): Promise<AgentResponse> {
-    // Simple implementation - in production, use proper event system
-    while (this.processing) {
-      await new Promise(resolve => setTimeout(resolve, 50));
-    }
-    return await this.processQueue();
+    this.processing = false;
   }
 }

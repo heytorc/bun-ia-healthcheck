@@ -37,11 +37,20 @@ export class HealthCheckController {
     }
 
     // Use the first adapter as default
-    const result = await this.healthCheckService.executeHealthCheck(adapters[0]!);
+    const firstAdapter = adapters[0];
+    if (!firstAdapter) {
+      return {
+        status: 'unhealthy',
+        message: 'No health check adapters available',
+        timestamp: new Date()
+      };
+    }
+
+    const result = await this.healthCheckService.executeHealthCheck(firstAdapter);
     
     return {
       ...result,
-      adapter: adapters[0]
+      adapter: firstAdapter
     };
   }
 
